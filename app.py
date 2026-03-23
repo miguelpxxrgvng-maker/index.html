@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import sqlite3
 import datetime
@@ -194,6 +194,29 @@ def obtener_comentarios(producto_id):
     coms = [{"texto":x[0],"foto":x[1],"usuario":x[2]} for x in c.fetchall()]
     conn.close()
     return jsonify(coms)
+@app.route("/")
+def index():
+    # Cargar productos desde la DB
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT * FROM productos")
+    prods = c.fetchall()
+    conn.close()
+    
+    productos_data = []
+    for p in prods:
+        productos_data.append({
+            "id": p[0],
+            "nombre": p[1],
+            "categoria": p[2],
+            "precio": p[3],
+            "stock": p[4],
+            "talla": p[5],
+            "marca": p[6],
+            "img": p[7]
+        })
+    
+    return render_template("index.html", productos_data=productos_data)
 
 # ===== Ejecutar app =====
 if __name__ == "__main__":
