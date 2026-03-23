@@ -1,0 +1,341 @@
+# app.py - TIENDA FINAL REAL TODO EN UNO
+from flask import Flask, request, jsonify, render_template_string
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+import json
+
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+# ===== MODELOS =====
+class Usuario(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(50))
+    email = db.Column(db.String(50), unique=True)
+    password = db.Column(db.String(50))
+    es_admin = db.Column(db.Boolean, default=False)
+
+class Producto(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(50))
+    categoria = db.Column(db.String(30))
+    precio = db.Column(db.Float)
+    stock = db.Column(db.Integer)
+    talla = db.Column(db.String(5))
+    marca = db.Column(db.String(30))
+    img = db.Column(db.String(200))
+
+class Pedido(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'))
+    total = db.Column(db.Float)
+    estado = db.Column(db.String(20), default="Pendiente")
+    fecha = db.Column(db.DateTime, default=datetime.utcnow)
+    productos = db.Column(db.String)  # JSON string [{id,nombre,precio}...]
+
+class Comentario(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer)
+    producto_id = db.Column(db.Integer)
+    texto = db.Column(db.String(300))
+    foto = db.Column(db.String(200))
+
+db.create_all()
+
+# Crear un admin inicial si no existe
+if not Usuario.query.filter_by(es_admin=True).first():
+    admin = Usuario(nombre="Admin", email="admin@zona94.com", password="admin123", es_admin=True)
+    db.session.add(admin)
+    db.session.commit()
+
+# ===== RUTA PRINCIPAL / FRONTEND =====
+@app.route("/")
+def index():
+    productos = Producto.query.all()
+    productos_data = [
+        {"id": p.id, "nombre": p.nombre, "categoria": p.categoria, "precio": p.precio,
+         "stock": p.stock, "talla": p.talla, "marca": p.marca, "img": p.img}
+        for p in productos
+    ]
+    return render_template_string("""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zona94_ Tienda Final</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,sans-serif;}
+body{background:#f5f5f5;color:#333;}
+header,footer{background:#222;color:#fff;text-align:center;padding:15px;}
+nav a{color:#fff;margin:0 10px;text-decoration:none;font-weight:bold;}
+nav a:hover{text-decoration:underline;}
+main{padding:20px;}
+#productos{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:20px;margin-top:20px;}
+.producto{background:#fff;padding:10px;border-radius:5px;text-align:center;box-shadow:0 2px 5px rgba(0,0,0,0.1);}
+.producto img{width:100%;height:auto;margin-bottom:10px;}
+.producto h3{font-size:1.1rem;margin-bottom:5px;}
+.producto p{font-size:0.9rem;margin-bottom:5px;}
+.producto button{padding:5px 10px;background:#4caf50;color:#fff;border:none;border-radius:3px;cursor:pointer;}
+.producto button:hover{background:#43a047;}
+#carrito-productos, #lista-pedidos, #lista-comentarios{margin-top:10px;}
+.producto-carrito,.pedido,.comentario{background:#fff;padding:10px;margin-bottom:10px;border-radius:5px;box-shadow:0 1px 3px rgba(0,0,0,0.1);}
+#buscador{width:100%;padding:5px;margin-bottom:10px;}
+#admin-panel{display:none;padding:20px;background:#eee;border-radius:5px;margin-top:20px;}
+#admin-panel h3{margin-bottom:10px;}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+<script src="https://www.paypal.com/sdk/js?client-id=sb&currency=EUR"></script>
+</head>
+<body>
+<header>
+<h1>Zona94_ Tienda Final</h1>
+<nav>
+<a href="#productos-section">Productos</a>
+<a href="#carrito-section">Carrito</a>
+<a href="#usuarios-section">Usuarios</a>
+<a href="#admin-panel">Admin</a>
+<a href="#comentarios-section">Comentarios</a>
+</nav>
+</header>
+
+<main>
+<h2 id="productos-section">Productos</h2>
+<input type="text" id="buscador" placeholder="Buscar producto...">
+<div id="productos"></div>
+
+<h2 id="carrito-section">Carrito</h2>
+<div id="carrito-productos"></div>
+<p>Total: €<span id="total-final">0</span></p>
+<div id="paypal-button-container"></div>
+
+<h2 id="usuarios-section">Registro / Login</h2>
+<div id="registro-login">
+<input type="text" id="reg-nombre" placeholder="Nombre">
+<input type="email" id="reg-email" placeholder="Email">
+<input type="password" id="reg-password" placeholder="Contraseña">
+<button id="btn-registrar">Registrar</button>
+<br><br>
+<input type="email" id="login-email" placeholder="Email">
+<input type="password" id="login-password" placeholder="Contraseña">
+<button id="btn-login">Login</button>
+<button id="btn-logout">Logout</button>
+<p id="usuario-nombre"></p>
+</div>
+
+<div id="admin-panel">
+<h3>Panel Administrador</h3>
+<p>Añadir producto:</p>
+<input type="text" id="admin-nombre" placeholder="Nombre">
+<input type="text" id="admin-categoria" placeholder="Categoría">
+<input type="number" id="admin-precio" placeholder="Precio">
+<input type="number" id="admin-stock" placeholder="Stock">
+<input type="text" id="admin-talla" placeholder="Talla">
+<input type="text" id="admin-marca" placeholder="Marca">
+<input type="text" id="admin-img" placeholder="URL Imagen">
+<button id="btn-agregar-producto">Agregar</button>
+
+<h3>Editar / Eliminar productos:</h3>
+<div id="lista-productos-admin"></div>
+
+<h3>Pedidos:</h3>
+<div id="lista-pedidos"></div>
+</div>
+
+<h2 id="comentarios-section">Comentarios de clientes</h2>
+<div id="lista-comentarios"></div>
+<div id="nuevo-comentario" style="display:none;">
+<textarea id="texto-comentario" placeholder="Escribe tu opinión..."></textarea>
+<input type="text" id="url-foto" placeholder="URL de tu foto (opcional)">
+<button id="btn-comentar">Publicar comentario</button>
+</div>
+
+</main>
+
+<footer>
+<p>&copy; 2026 Zona94_ Todos los derechos reservados</p>
+</footer>
+
+<script>
+let productos = {{ productos_data|tojson }};
+let carrito = [];
+let usuarioActivo = null;
+let es_admin = false;
+
+function mostrarProductos(){
+    $("#productos").html("");
+    productos.forEach(p=>{
+        $("#productos").append(`<div class="producto">
+<img src="${p.img}" alt="${p.nombre}">
+<h3>${p.nombre}</h3>
+<p>Marca: ${p.marca}</p>
+<p>Talla: ${p.talla}</p>
+<p>Precio: €${p.precio}</p>
+<button onclick="agregarAlCarrito(${p.id})">Agregar al carrito</button>
+</div>`);
+    });
+    mostrarProductosAdmin();
+}
+
+function agregarAlCarrito(id){
+    let p = productos.find(x=>x.id===id);
+    carrito.push(p);
+    actualizarTotal();
+}
+
+function actualizarTotal(){
+    let total = carrito.reduce((s,p)=>s+p.precio,0);
+    $("#total-final").text(total.toFixed(2));
+}
+
+// ===== Registro / Login =====
+$("#btn-registrar").click(()=>{
+    $.post("/api/registrar",{nombre:$("#reg-nombre").val(),email:$("#reg-email").val(),password:$("#reg-password").val()},data=>alert(data.msg));
+});
+
+$("#btn-login").click(()=>{
+    $.post("/api/login",{email:$("#login-email").val(),password:$("#login-password").val()},data=>{
+        if(data.success){
+            usuarioActivo = data.usuario;
+            es_admin = data.usuario.es_admin;
+            $("#usuario-nombre").text("Bienvenido "+usuarioActivo.nombre);
+            if(es_admin) $("#admin-panel").show();
+        } else alert(data.msg);
+    });
+});
+
+$("#btn-logout").click(()=>{
+    usuarioActivo = null;
+    es_admin = false;
+    $("#usuario-nombre").text("");
+    $("#admin-panel").hide();
+});
+
+// ===== ADMIN =====
+$("#btn-agregar-producto").click(()=>{
+    let newP = {
+        nombre: $("#admin-nombre").val(),
+        categoria: $("#admin-categoria").val(),
+        precio: parseFloat($("#admin-precio").val()),
+        stock: parseInt($("#admin-stock").val()),
+        talla: $("#admin-talla").val(),
+        marca: $("#admin-marca").val(),
+        img: $("#admin-img").val()
+    };
+    $.post("/api/productos", newP, data=>{
+        alert(data.msg);
+        productos.push(data.producto);
+        mostrarProductos();
+    });
+});
+
+function mostrarProductosAdmin(){
+    if(!es_admin) return;
+    $("#lista-productos-admin").html("");
+    productos.forEach(p=>{
+        $("#lista-productos-admin").append(`
+<div>
+${p.nombre} - €${p.precio} 
+<button onclick="editarProducto(${p.id})">Editar</button>
+<button onclick="eliminarProducto(${p.id})">Eliminar</button>
+</div>
+`);
+    });
+}
+
+function editarProducto(id){
+    let p = productos.find(x=>x.id===id);
+    let nuevoNombre = prompt("Nombre",p.nombre);
+    let nuevoPrecio = prompt("Precio",p.precio);
+    if(nuevoNombre && nuevoPrecio){
+        $.post("/api/producto/editar",{id:id,nombre:nuevoNombre,precio:parseFloat(nuevoPrecio)},data=>{
+            alert(data.msg);
+            p.nombre=nuevoNombre; p.precio=parseFloat(nuevoPrecio);
+            mostrarProductos();
+        });
+    }
+}
+
+function eliminarProducto(id){
+    if(confirm("Eliminar producto?")){
+        $.post("/api/producto/eliminar",{id:id},data=>{
+            alert(data.msg);
+            productos = productos.filter(p=>p.id!==id);
+            mostrarProductos();
+        });
+    }
+}
+
+// ===== PAYPAL =====
+paypal.Buttons({
+    createOrder:(data,actions)=>actions.order.create({purchase_units:[{amount:{value:$("#total-final").text()}}]}),
+    onApprove:(data,actions)=>actions.order.capture().then(details=>{
+        alert("Pago completado por "+details.payer.name.given_name);
+        if(usuarioActivo){
+            $.post("/api/pedido",{usuario_id:usuarioActivo.id,productos:JSON.stringify(carrito),total:$("#total-final").text()},()=>{ carrito=[]; actualizarTotal(); });
+        }
+    })
+}).render('#paypal-button-container');
+
+mostrarProductos();
+</script>
+
+</body>
+</html>
+""", productos_data=productos_data)
+
+# ===== API =====
+@app.route("/api/registrar", methods=["POST"])
+def api_registrar():
+    data = request.form
+    if Usuario.query.filter_by(email=data['email']).first():
+        return jsonify({"msg":"Email ya registrado"})
+    u = Usuario(nombre=data['nombre'], email=data['email'], password=data['password'])
+    db.session.add(u); db.session.commit()
+    return jsonify({"msg":"Registro exitoso"})
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    data = request.form
+    u = Usuario.query.filter_by(email=data['email'], password=data['password']).first()
+    if u:
+        return jsonify({"success":True,"usuario":{"id":u.id,"nombre":u.nombre,"es_admin":u.es_admin}})
+    return jsonify({"success":False,"msg":"Email o contraseña incorrectos"})
+
+@app.route("/api/productos", methods=["POST"])
+def api_productos():
+    data = request.form
+    p = Producto(nombre=data['nombre'], categoria=data['categoria'], precio=float(data['precio']),
+                 stock=int(data['stock']), talla=data['talla'], marca=data['marca'], img=data['img'])
+    db.session.add(p); db.session.commit()
+    return jsonify({"msg":"Producto agregado","producto":{"id":p.id,"nombre":p.nombre,"categoria":p.categoria,"precio":p.precio,"stock":p.stock,"talla":p.talla,"marca":p.marca,"img":p.img}})
+
+@app.route("/api/producto/editar", methods=["POST"])
+def api_producto_editar():
+    data = request.form
+    p = Producto.query.get(int(data['id']))
+    if not p: return jsonify({"msg":"Producto no encontrado"})
+    p.nombre = data.get('nombre', p.nombre)
+    p.precio = float(data.get('precio', p.precio))
+    db.session.commit()
+    return jsonify({"msg":"Producto editado"})
+
+@app.route("/api/producto/eliminar", methods=["POST"])
+def api_producto_eliminar():
+    data = request.form
+    p = Producto.query.get(int(data['id']))
+    if not p: return jsonify({"msg":"Producto no encontrado"})
+    db.session.delete(p); db.session.commit()
+    return jsonify({"msg":"Producto eliminado"})
+
+@app.route("/api/pedido", methods=["POST"])
+def api_pedido():
+    data = request.form
+    pedido = Pedido(usuario_id=int(data['usuario_id']), productos=data['productos'], total=float(data['total']))
+    db.session.add(pedido); db.session.commit()
+    return jsonify({"msg":"Pedido registrado"})
+
+if __name__=="__main__":
+    app.run(debug=True)
