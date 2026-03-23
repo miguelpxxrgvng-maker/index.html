@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sqlite3
 import datetime
+import os
 
 # ===== Configuración básica =====
 app = Flask(__name__)
