@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Zona94_ Tienda Final</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
 <script src="https://www.paypal.com/sdk/js?client-id=sb&currency=EUR"></script>
 </head>
@@ -23,7 +23,19 @@
 <main>
 <h2 id="productos-section">Productos</h2>
 <input type="text" id="buscador" placeholder="Buscar producto...">
-<div id="productos"></div>
+<div id="productos">
+    <!-- Flask ya coloca los productos desde backend -->
+    {% for p in productos_data %}
+    <div class="producto">
+        <img src="{{ p.img }}" alt="{{ p.nombre }}">
+        <h3>{{ p.nombre }}</h3>
+        <p>Marca: {{ p.marca }}</p>
+        <p>Talla: {{ p.talla }}</p>
+        <p>Precio: €{{ p.precio }}</p>
+        <button onclick="agregarAlCarrito({{ p.id }})">Agregar al carrito</button>
+    </div>
+    {% endfor %}
+</div>
 
 <h2 id="carrito-section">Carrito</h2>
 <div id="carrito-productos"></div>
@@ -78,36 +90,9 @@
 </footer>
 
 <script>
-let productos = {{ productos_data|tojson }};
 let carrito = [];
 let usuarioActivo = null;
 let es_admin = false;
-
-function mostrarProductos(){
-    $("#productos").html("");
-    productos.forEach(p=>{
-        $("#productos").append(`<div class="producto">
-<img src="${p.img}" alt="${p.nombre}">
-<h3>${p.nombre}</h3>
-<p>Marca: ${p.marca}</p>
-<p>Talla: ${p.talla}</p>
-<p>Precio: €${p.precio}</p>
-<button onclick="agregarAlCarrito(${p.id})">Agregar al carrito</button>
-</div>`);
-    });
-    mostrarProductosAdmin();
-}
-
-function agregarAlCarrito(id){
-    let p = productos.find(x=>x.id===id);
-    carrito.push(p);
-    actualizarTotal();
-}
-
-function actualizarTotal(){
-    let total = carrito.reduce((s,p)=>s+p.precio,0);
-    $("#total-final").text(total.toFixed(2));
-}
 
 // ===== Registro / Login =====
 $("#btn-registrar").click(()=>{
@@ -145,46 +130,12 @@ $("#btn-agregar-producto").click(()=>{
     };
     $.post("/api/productos", newP, data=>{
         alert(data.msg);
-        productos.push(data.producto);
-        mostrarProductos();
+        // actualizar productos si quieres refrescar admin panel
     });
 });
 
-function mostrarProductosAdmin(){
-    if(!es_admin) return;
-    $("#lista-productos-admin").html("");
-    productos.forEach(p=>{
-        $("#lista-productos-admin").append(`
-<div>
-${p.nombre} - €${p.precio} 
-<button onclick="editarProducto(${p.id})">Editar</button>
-<button onclick="eliminarProducto(${p.id})">Eliminar</button>
-</div>
-`);
-    });
-}
-
-function editarProducto(id){
-    let p = productos.find(x=>x.id===id);
-    let nuevoNombre = prompt("Nombre",p.nombre);
-    let nuevoPrecio = prompt("Precio",p.precio);
-    if(nuevoNombre && nuevoPrecio){
-        $.post("/api/producto/editar",{id:id,nombre:nuevoNombre,precio:parseFloat(nuevoPrecio)},data=>{
-            alert(data.msg);
-            p.nombre=nuevoNombre; p.precio=parseFloat(nuevoPrecio);
-            mostrarProductos();
-        });
-    }
-}
-
-function eliminarProducto(id){
-    if(confirm("Eliminar producto?")){
-        $.post("/api/producto/eliminar",{id:id},data=>{
-            alert(data.msg);
-            productos = productos.filter(p=>p.id!==id);
-            mostrarProductos();
-        });
-    }
+function agregarAlCarrito(id){
+    // aquí puedes buscar el producto en la lista de Flask o pasar por API
 }
 
 // ===== PAYPAL =====
@@ -193,13 +144,11 @@ paypal.Buttons({
     onApprove:(data,actions)=>actions.order.capture().then(details=>{
         alert("Pago completado por "+details.payer.name.given_name);
         if(usuarioActivo){
-            $.post("/api/pedido",{usuario_id:usuarioActivo.id,productos:JSON.stringify(carrito),total:$("#total-final").text()},()=>{ carrito=[]; actualizarTotal(); });
+            $.post("/api/pedidos",{usuario_id:usuarioActivo.id,productos:JSON.stringify(carrito),total:$("#total-final").text()},()=>{ carrito=[]; });
         }
     })
 }).render('#paypal-button-container');
 
-mostrarProductos();
 </script>
-
 </body>
 </html>
